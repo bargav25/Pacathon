@@ -29,6 +29,9 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Comparator;
+import java.util.PriorityQueue;
+import java.util.Arrays;
+
 
 public class NeatPacmanBehavior implements Behavior {
 
@@ -83,6 +86,13 @@ public class NeatPacmanBehavior implements Behavior {
         return pelletCount;
     }
 
+
+    private boolean isValidPosition(Maze maze, Vector2i position) {
+        return position != null && maze != null && 
+               position.x >= 0 && position.x < maze.getDimensions().x() &&
+               position.y >= 0 && position.y < maze.getDimensions().y();
+    }
+
     private int penalizePelletInteraction() {
 
         Vector2i currentTilePosition = pacman.getTilePosition(); // Get Pacman's current tile position
@@ -102,7 +112,7 @@ public class NeatPacmanBehavior implements Behavior {
         }
 
         if (currentTile.getState() == TileState.POWER_PELLET) {
-           return 20;
+           return 200;
         }
 
         return -1;   // Not sure one or zero.
@@ -123,7 +133,7 @@ public class NeatPacmanBehavior implements Behavior {
                 // Check if ghost and pacman are in the same position
                 if (pacmanPosition == ghostPosition) {
                     if (ghost.getState() == GhostState.CHASE || ghost.getState() == GhostState.SCATTER) {
-                        return -1000;
+                        return -5000;
                     }
                     if (ghost.getState() == GhostState.EATEN) {
                         return 0;         
@@ -149,7 +159,7 @@ public class NeatPacmanBehavior implements Behavior {
                 Vector2d fruitPosition = fruit.getPosition();
                 // Reward if Pacman will eat the fruit
                 if (pacmanPosition == fruitPosition) {
-                    return 50;
+                    return 200;
                 }
             }
         }
@@ -343,10 +353,15 @@ public class NeatPacmanBehavior implements Behavior {
         return allGhostsEncoding;
     }
 
-    private Vector2i findNearestPelletPosition() {
+    private Vector2i findNearestPowerPelletPosition() {
         // Get Pacman's current tile position
         Vector2i startTilePosition = pacman.getTilePosition();
         Maze maze = pacman.getMaze();
+    
+        // Validate initial position
+        if (!isValidPosition(maze, startTilePosition)) {
+            return null;
+        }
     
         // Queue for BFS
         Queue<Vector2i> queue = new LinkedList<>();
@@ -358,24 +373,129 @@ public class NeatPacmanBehavior implements Behavior {
         visited.add(startTilePosition);
     
         // Directions to explore: UP, DOWN, LEFT, RIGHT
-        Direction[] directions = {Direction.UP, Direction.DOWN, Direction.LEFT, Direction.RIGHT};
+        Direction[] directions = Direction.values();
     
         // Perform BFS
         while (!queue.isEmpty()) {
             Vector2i currentTilePosition = queue.poll();
     
-            // Check if this tile contains a pellet
+            // Validate current position
+            if (!isValidPosition(maze, currentTilePosition)) {
+                continue;
+            }
+    
+            // Check if this tile contains a power pellet
             Tile currentTile = maze.getTile(currentTilePosition);
-            if (currentTile.getState() == TileState.PELLET || currentTile.getState() == TileState.POWER_PELLET) {
-                return currentTilePosition; // Return the position of the nearest pellet
+            if (currentTile.getState() == TileState.POWER_PELLET) {
+                return new Vector2i(currentTilePosition); // Return a copy of the position
             }
     
             // Explore neighboring tiles in each direction
             for (Direction direction : directions) {
                 Vector2i neighborPosition = new Vector2i(currentTilePosition).add(direction.asVector());
     
-                // If the neighbor is passable and not visited
-                if (!visited.contains(neighborPosition)) {
+                // If the neighbor is valid, passable and not visited
+                if (!visited.contains(neighborPosition) && isValidPosition(maze, neighborPosition)) {
+                    Tile neighborTile = maze.getTile(neighborPosition);
+                    if (neighborTile.getState().isPassable()) {
+                        queue.add(new Vector2i(neighborPosition)); // Add a copy of the position
+                        visited.add(neighborPosition);
+                    }
+                }
+            }
+        }
+    
+        // If no power pellet is found, return null
+        return null;
+    }
+    
+    private float[] encodeNearestPowerPelletPosition() {
+        // Default return value for when no power pellet is found
+        float[] defaultEncoding = new float[]{0f, 0f, 0f};
+    
+        // Get Pacman's position and validate
+        Vector2d pacmanPosition = pacman.getPosition();
+        if (pacmanPosition == null) {
+            return defaultEncoding;
+        }
+    
+        // Perform BFS to find the nearest power pellet
+        Vector2i nearestPelletPosition = findNearestPowerPelletPosition();
+        
+        if (nearestPelletPosition == null) {
+            return defaultEncoding;
+        }
+    
+        try {
+            // Calculate relative coordinates
+            Vector2d relative = new Vector2d(nearestPelletPosition.x, nearestPelletPosition.y)
+                .sub(pacmanPosition);
+    
+            // Get Pacman's current direction and validate
+            Direction forward = pacman.getDirection();
+            if (forward == null) {
+                return defaultEncoding;
+            }
+    
+            Direction right = forward.right();
+    
+            // Encode relative coordinates based on Pacman's current direction
+            float pelletX = (float) (relative.x() * forward.getDx() + relative.y() * forward.getDy());
+            float pelletY = (float) (relative.x() * right.getDx() + relative.y() * right.getDy());
+            float distance = (float) relative.length();
+    
+            return new float[]{pelletX, pelletY, distance};
+        } catch (Exception e) {
+            // If any calculation fails, return the default encoding
+            return defaultEncoding;
+        }
+    }
+
+    private float[] encodeTopNPelletPositions(int topN) {
+        // Prepare the encoding array with exactly 12 slots for top 4 nearest pellets (each pellet has x, y, distance)
+        float[] encodedPellets = new float[topN * 3];
+        
+        // Initialize all positions to zero in case fewer than topN pellets are found
+        Arrays.fill(encodedPellets, 0f);
+    
+        // Get Pacman's current tile position
+        Vector2i pacmanTilePosition = pacman.getTilePosition();
+        Maze maze = pacman.getMaze();
+    
+        // Priority queue to store nearest pellets with a comparator based on distance
+        PriorityQueue<Vector2i> pelletQueue = new PriorityQueue<>((a, b) -> {
+            float distA = (float) pacmanTilePosition.distance(a);
+            float distB = (float) pacmanTilePosition.distance(b);
+            return Float.compare(distA, distB);
+        });
+    
+        // Perform BFS to find all pellets
+        Queue<Vector2i> queue = new LinkedList<>();
+        Set<Vector2i> visited = new HashSet<>();
+        queue.add(pacmanTilePosition);
+        visited.add(pacmanTilePosition);
+    
+        Direction[] directions = Direction.values();
+    
+        while (!queue.isEmpty()) {
+            Vector2i currentTilePosition = queue.poll();
+            
+            // Check if the current position is within maze bounds
+            if (!isValidPosition(maze, currentTilePosition)) {
+                continue;
+            }
+    
+            Tile currentTile = maze.getTile(currentTilePosition);
+    
+            if (currentTile.getState() == TileState.PELLET || currentTile.getState() == TileState.POWER_PELLET) {
+                pelletQueue.add(new Vector2i(currentTilePosition));
+            }
+    
+            for (Direction direction : directions) {
+                Vector2i neighborPosition = new Vector2i(currentTilePosition).add(direction.asVector());
+                
+                // Only process neighbor if it's within bounds and not visited
+                if (!visited.contains(neighborPosition) && isValidPosition(maze, neighborPosition)) {
                     Tile neighborTile = maze.getTile(neighborPosition);
                     if (neighborTile.getState().isPassable()) {
                         queue.add(neighborPosition);
@@ -385,36 +505,31 @@ public class NeatPacmanBehavior implements Behavior {
             }
         }
     
-        // If no pellet is found, return null (indicating no reachable pellets)
-        return null;
-    }
+        int index = 0;
     
-    private float[] encodeNearestPelletPosition() {
-        // Perform BFS to find the nearest pellet
-        Vector2i nearestPelletPosition = findNearestPelletPosition();
-        
-        if (nearestPelletPosition == null) {
-            // If no pellet is found, return zero features
-            return new float[]{0f, 0f, 0f};
+        // Encode the nearest pellets up to topN
+        while (!pelletQueue.isEmpty() && index < topN * 3) {
+            Vector2i pelletPosition = pelletQueue.poll();
+            Vector2d relative = new Vector2d(pelletPosition.x, pelletPosition.y).sub(pacman.getPosition());
+    
+            // Encode based on Pacman's current direction
+            Direction forward = pacman.getDirection();
+            Direction right = forward.right();
+    
+            float pelletX = (float) (relative.x() * forward.getDx() + relative.y() * forward.getDy());
+            float pelletY = (float) (relative.x() * right.getDx() + relative.y() * right.getDy());
+            float distance = (float) relative.length();
+    
+            // Safely add to encoding array
+            encodedPellets[index++] = pelletX;
+            encodedPellets[index++] = pelletY;
+            encodedPellets[index++] = distance;
         }
     
-        // Get Pacman's current position
-        Vector2d pacmanPosition = pacman.getPosition();
-    
-        // Calculate relative coordinates
-        Vector2d relative = new Vector2d(nearestPelletPosition.x, nearestPelletPosition.y).sub(pacmanPosition);
-    
-        // Encode relative coordinates based on Pacman's current direction
-        Direction forward = pacman.getDirection();
-        Direction right = forward.right();
-    
-        float pelletX = (float) (relative.x() * forward.getDx() + relative.y() * forward.getDy());
-        float pelletY = (float) (relative.x() * right.getDx() + relative.y() * right.getDy());
-    
-        // Return the encoded features (normalized if necessary)
-        float distance = (float) relative.length();
-        return new float[]{pelletX, pelletY, distance};
+        return encodedPellets;
     }
+    
+    
 
     private float calculateDistanceToWall(Direction direction) {
 
@@ -517,7 +632,12 @@ public class NeatPacmanBehavior implements Behavior {
         boolean canMoveRight = pacman.canMove(right);
         boolean canMoveBehind = pacman.canMove(behind);
 
-        float[] nearestPelletEnc = encodeNearestPelletPosition();
+        float[] nearestPowerPelletEnc = encodeNearestPowerPelletPosition();
+        float[] pelletFeatures = encodeTopNPelletPositions(4); // Encoding for 4 nearest pellets
+
+        // float[] pelletFeatures = new float[12];
+
+
         float[] nearestFruitEnc = encodeNearestFruitPosition();
         // float[] nearestGhostEnc = encodeNearestGhostMovement();
         float[] ghostEnc = encodeAllGhosts();
@@ -576,9 +696,18 @@ public class NeatPacmanBehavior implements Behavior {
             pelletsLeft,
             pelletsRight,
             pelletsBehind,
-            nearestPelletEnc[0],
-            nearestPelletEnc[1],
-            nearestPelletEnc[2],
+            pelletFeatures[0],
+            pelletFeatures[1],
+            pelletFeatures[2],
+            pelletFeatures[3],
+            pelletFeatures[4],
+            pelletFeatures[5],
+            pelletFeatures[6],
+            pelletFeatures[7],
+            pelletFeatures[8],
+            pelletFeatures[9],
+            pelletFeatures[10],
+            pelletFeatures[11],
             ghostEnc[0],
             ghostEnc[1],
             ghostEnc[2],
@@ -599,6 +728,9 @@ public class NeatPacmanBehavior implements Behavior {
             nearestFruitEnc[0],
             nearestFruitEnc[1],
             nearestFruitEnc[2],
+            nearestPowerPelletEnc[0],
+            nearestPowerPelletEnc[1],
+            nearestPowerPelletEnc[2]
         }).join();
 
         // Sort the directions by the network output in descending order
@@ -647,7 +779,14 @@ public class NeatPacmanBehavior implements Behavior {
         trackVisitState[pacmanX][pacmanY] += 1;
 
         // Penalize if visit a tile more than allowed threshold
-        scoreModifier -= trackVisitState[pacmanX][pacmanY]; // Reward for visiting a tile more than allowed threshold
+        int maxAllowedVisit = 10;  // Set a threshold for allowed visits
+        int visits = trackVisitState[pacmanX][pacmanY];
+        
+        // Apply a proportional penalty based on the number of visits exceeding the threshold
+        if (visits > maxAllowedVisit) {
+            int excessVisits = visits - maxAllowedVisit;
+            scoreModifier -= excessVisits * 10;  // 10 is a scaling factor; adjust as needed
+        }
 
         // Penalize Pellet interactions
         scoreModifier += penalizePelletInteraction();
