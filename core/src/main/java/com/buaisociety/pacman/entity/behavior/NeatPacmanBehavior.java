@@ -148,11 +148,21 @@ public class NeatPacmanBehavior implements Behavior {
                 int distance = Math.abs(ghostPosition.x - currentTilePosition.x) + Math.abs(ghostPosition.y - currentTilePosition.y);
     
                 // Apply penalty if Pacman and ghost are moving toward each other within 1 or 2 tiles with no walls in between
-                if (distance <= 2 && isMovingTowardsEachOther(pacmanDirection, ghostDirection, currentTilePosition, ghostPosition, distance)) {
+                if (distance <= 2) {
                     if (ghost.getState() == GhostState.CHASE || ghost.getState() == GhostState.SCATTER) {
-                        return -2000;
+
+                        if (isMovingTowardsEachOther(pacmanDirection, ghostDirection, currentTilePosition, ghostPosition, distance)){
+                            return -5000;
+                        }
+                        return -1000;
                     }
+                    if (ghost.getState() == GhostState.FRIGHTENED) {
+                        return +500;
+                    }
+
                 }
+
+                
     
                 // Additional penalty if they are on the same tile
                 if (currentTilePosition.equals(ghostPosition)) {
@@ -888,7 +898,7 @@ private float[] encodeTopNPelletPositions(int topN) {
         }
         
         if (currentLives < lastStepLives) {
-            return -5000;
+            return -10000;
         }
     
         lastStepLives = currentLives;
@@ -1126,7 +1136,7 @@ private float[] encodeTopNPelletPositions(int topN) {
         // Apply a proportional penalty based on the number of visits exceeding the threshold
         if (visits > maxAllowedVisit) {
             int excessVisits = visits - maxAllowedVisit;
-            scoreModifier -= excessVisits * 10;  // 10 is a scaling factor; adjust as needed
+            scoreModifier -= excessVisits * 60;  // 10 is a scaling factor; adjust as needed
         }
 
         // Penalize Pellet interactions
