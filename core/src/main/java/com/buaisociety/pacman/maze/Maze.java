@@ -281,6 +281,7 @@ public class Maze implements Disposable {
     public void eatGhost(@NotNull PacmanEntity pacman, @NotNull GhostEntity ghost) {
         // Ghosts can only be eaten when they are frightened
         if (ghost.getState() == GhostState.CHASE || ghost.getState() == GhostState.SCATTER) {
+
             pacman.kill();
             return;
         }

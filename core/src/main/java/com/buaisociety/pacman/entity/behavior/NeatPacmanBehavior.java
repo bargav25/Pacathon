@@ -9,6 +9,7 @@ import com.buaisociety.pacman.maze.Tile;
 import com.buaisociety.pacman.maze.TileState;
 import com.buaisociety.pacman.sprite.DebugDrawing;
 import com.cjcrafter.neat.Client;
+import com.buaisociety.pacman.GameManager;
 import com.buaisociety.pacman.entity.Direction;
 import com.buaisociety.pacman.entity.Entity;
 import com.buaisociety.pacman.entity.PacmanEntity;
@@ -44,14 +45,16 @@ public class NeatPacmanBehavior implements Behavior {
     // specific pools of points instead of subtracting from all.
     private int scoreModifier = 0;
 
+    private int lastStepLives = 3;
+
     private int numUpdatesSinceLastScore = 0;
     private int lastScore = 0;
     private int lastPelletCount = 0;
     // private Vector2d last_position = pacman.getPosition();
 
-    int mazeX = 28;
-    int mazeY = 36;
-    int[][] trackVisitState = new int[mazeX][mazeY];
+    private int mazeX = 28;
+    private int mazeY = 36;
+    private int[][] trackVisitState = new int[mazeX][mazeY];
 
 
     public NeatPacmanBehavior(@NotNull Client client) {
@@ -78,8 +81,15 @@ public class NeatPacmanBehavior implements Behavior {
             }
             
             // Check if the tile contains a pellet
-            if (currentTile.getState() == TileState.PELLET || currentTile.getState() == TileState.POWER_PELLET) {
+            if (currentTile.getState() == TileState.PELLET) {
                 pelletCount++; // Increment the pellet count
+            }
+
+            
+
+            if (currentTile.getState() == TileState.POWER_PELLET) {
+
+                pelletCount++;
             }
         }
         
@@ -118,53 +128,57 @@ public class NeatPacmanBehavior implements Behavior {
         return -1;   // Not sure one or zero.
     }
 
-    private int penalizeGhostInteraction() {
-            // Get Pacman's current position
-        Vector2d pacmanPosition = pacman.getPosition();
+    // private int penalizeGhostInteraction() {
+    //         // Get Pacman's current position
+    //     Vector2d pacmanPosition = pacman.getPosition();
     
-        // Iterate over all entities in the maze
-        for (Entity entity : pacman.getMaze().getEntities()) {
-            // Check if the entity is a ghost
-            if (entity instanceof GhostEntity) {
-                GhostEntity ghost = (GhostEntity) entity;
-                // Get the ghost's position
-                Vector2d ghostPosition = ghost.getPosition();
+    //     // Iterate over all entities in the maze
+    //     for (Entity entity : pacman.getMaze().getEntities()) {
+    //         // Check if the entity is a ghost
+    //         if (entity instanceof GhostEntity) {
+    //             GhostEntity ghost = (GhostEntity) entity;
+    //             // Get the ghost's position
+    //             Vector2d ghostPosition = ghost.getPosition();
     
-                // Check if ghost and pacman are in the same position
-                if (pacmanPosition == ghostPosition) {
-                    if (ghost.getState() == GhostState.CHASE || ghost.getState() == GhostState.SCATTER) {
-                        return -5000;
-                    }
-                    if (ghost.getState() == GhostState.EATEN) {
-                        return 0;         
-                    }
-                    return +1000;
-                }
-            }
-        }
+    //             // Check if ghost and pacman are in the same position
+    //             if (pacmanPosition == ghostPosition) {
+    //                 if (ghost.getState() == GhostState.CHASE || ghost.getState() == GhostState.SCATTER) {
+    //                     return -5000;
+    //                 }
+    //                 if (ghost.getState() == GhostState.EATEN) {
+    //                     return 0;         
+    //                 }
+    //                 return +1000;
+    //             }
+    //         }
+    //     }
             
-        return 0;
-    }
+    //     return 0;
+    // }
 
     private float penalizeFruitInteraction() {
-        // Get Pacman's current position
-        Vector2d pacmanPosition = pacman.getPosition();
-    
-        // Iterate over all fruits in the maze
+        // Get Pacman's current tile position as integer coordinates
+        int pacmanTileX = pacman.getTilePosition().x;
+        int pacmanTileY = pacman.getTilePosition().y;
+        
+        // Iterate over all entities in the maze
         for (Entity entity : pacman.getMaze().getEntities()) {
             // Check if the entity is a FruitEntity
             if (entity instanceof FruitEntity) {
                 FruitEntity fruit = (FruitEntity) entity;
-                // Get the fruit's position
-                Vector2d fruitPosition = fruit.getPosition();
-                // Reward if Pacman will eat the fruit
-                if (pacmanPosition == fruitPosition) {
+                // Get the fruit's tile position as integer coordinates
+                int fruitTileX = fruit.getTilePosition().x;
+                int fruitTileY = fruit.getTilePosition().y;
+                // Reward if Pacman is on the same tile as the fruit
+                if (pacmanTileX == fruitTileX && pacmanTileY == fruitTileY) {
                     return 200;
                 }
             }
         }
         return 0;
     }
+
+    
 
     private Vector2i findNearestFruitPosition() {
         Maze maze = pacman.getMaze();
@@ -558,6 +572,23 @@ public class NeatPacmanBehavior implements Behavior {
         return distance;
     }
 
+    private int penalizeRemainingLives() {
+
+        // Check remaining lives
+        int currentLives = pacman.getMaze().getLevelManager().getExtraLives();
+
+        if (currentLives > lastStepLives) {
+            return 5000;
+        }
+        
+        if (currentLives < lastStepLives) {
+            return -5000;
+        }
+    
+        lastStepLives = currentLives;
+        return 0;
+    }
+
 
 
     private float calculateDistanceToNearestFruit() {
@@ -792,7 +823,7 @@ public class NeatPacmanBehavior implements Behavior {
         scoreModifier += penalizePelletInteraction();
 
         // Penalize ghost interactions
-        scoreModifier += penalizeGhostInteraction();
+        scoreModifier += penalizeRemainingLives();
 
         // Penalize eating fruits
         scoreModifier += penalizeFruitInteraction();
