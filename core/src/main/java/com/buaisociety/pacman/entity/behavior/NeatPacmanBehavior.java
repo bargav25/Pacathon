@@ -2,6 +2,7 @@ package com.buaisociety.pacman.entity.behavior;
 
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+// import com.badlogic.gdx.maps.Map;
 // import com.badlogic.gdx.scenes.scene2d.ui.List;
 import com.badlogic.gdx.utils.Null;
 import com.buaisociety.pacman.maze.Maze;
@@ -32,6 +33,9 @@ import java.util.HashSet;
 import java.util.Comparator;
 import java.util.PriorityQueue;
 import java.util.Arrays;
+import java.util.Map;
+import java.util.HashMap;
+
 
 
 public class NeatPacmanBehavior implements Behavior {
@@ -128,6 +132,80 @@ public class NeatPacmanBehavior implements Behavior {
         return -1;   // Not sure one or zero.
     }
 
+    private int penalizeGhostInteraction() {
+        // Get Pacman's current tile position and direction
+        Vector2i currentTilePosition = pacman.getTilePosition();
+        Direction pacmanDirection = pacman.getDirection();
+    
+        // Iterate over all entities in the maze
+        for (Entity entity : pacman.getMaze().getEntities()) {
+            if (entity instanceof GhostEntity) {
+                GhostEntity ghost = (GhostEntity) entity;
+                Vector2i ghostPosition = ghost.getTilePosition();
+                Direction ghostDirection = ghost.getDirection();
+    
+                // Calculate Manhattan distance between ghost and Pacman
+                int distance = Math.abs(ghostPosition.x - currentTilePosition.x) + Math.abs(ghostPosition.y - currentTilePosition.y);
+    
+                // Apply penalty if Pacman and ghost are moving toward each other within 1 or 2 tiles with no walls in between
+                if (distance <= 2 && isMovingTowardsEachOther(pacmanDirection, ghostDirection, currentTilePosition, ghostPosition, distance)) {
+                    if (ghost.getState() == GhostState.CHASE || ghost.getState() == GhostState.SCATTER) {
+                        return -2000;
+                    }
+                }
+    
+                // Additional penalty if they are on the same tile
+                if (currentTilePosition.equals(ghostPosition)) {
+                    if (ghost.getState() == GhostState.CHASE || ghost.getState() == GhostState.SCATTER) {
+                        return -5000;
+                    }
+                    if (ghost.getState() == GhostState.FRIGHTENED) {
+                        return +1000;
+                    }
+                    if (ghost.getState() == GhostState.EATEN) {
+                        return 0; // No penalty or reward if the ghost is eaten
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+    
+    // Helper method to determine if Pacman and ghost are moving towards each other within 1 or 2 tiles with no walls in between
+    private boolean isMovingTowardsEachOther(Direction pacmanDirection, Direction ghostDirection, Vector2i pacmanPosition, Vector2i ghostPosition, int distance) {
+        int dx = ghostPosition.x - pacmanPosition.x;
+        int dy = ghostPosition.y - pacmanPosition.y;
+    
+        // Check if Pacman and ghost are in the same row or column and moving towards each other
+        boolean movingTowards = (dx > 0 && dx <= distance && pacmanDirection == Direction.RIGHT && ghostDirection == Direction.LEFT) ||
+                                (dx < 0 && -dx <= distance && pacmanDirection == Direction.LEFT && ghostDirection == Direction.RIGHT) ||
+                                (dy > 0 && dy <= distance && pacmanDirection == Direction.DOWN && ghostDirection == Direction.UP) ||
+                                (dy < 0 && -dy <= distance && pacmanDirection == Direction.UP && ghostDirection == Direction.DOWN);
+    
+        if (movingTowards) {
+            // Check for walls between Pacman and the ghost
+            if (dx != 0) { // Moving horizontally
+                int step = dx > 0 ? 1 : -1;
+                for (int x = pacmanPosition.x + step; x != ghostPosition.x; x += step) {
+                    Vector2i intermediatePosition = new Vector2i(x, pacmanPosition.y);
+                    if (!pacman.getMaze().getTile(intermediatePosition).getState().isPassable()) {
+                        return false; // Wall found in between
+                    }
+                }
+            } else if (dy != 0) { // Moving vertically
+                int step = dy > 0 ? 1 : -1;
+                for (int y = pacmanPosition.y + step; y != ghostPosition.y; y += step) {
+                    Vector2i intermediatePosition = new Vector2i(pacmanPosition.x, y);
+                    if (!pacman.getMaze().getTile(intermediatePosition).getState().isPassable()) {
+                        return false; // Wall found in between
+                    }
+                }
+            }
+        }
+        
+        return movingTowards;
+    }
+
     // private int penalizeGhostInteraction() {
     //         // Get Pacman's current position
     //     Vector2d pacmanPosition = pacman.getPosition();
@@ -179,63 +257,178 @@ public class NeatPacmanBehavior implements Behavior {
     }
 
     
-
-    private Vector2i findNearestFruitPosition() {
+    private int[] findNearestFruitPosition() {
         Maze maze = pacman.getMaze();
-        Vector2d pacmanPosition = pacman.getPosition(); // Pacman's current position
-        float minDistance = Float.MAX_VALUE;
-        Vector2i nearestFruitPosition = null;
+        Vector2i pacmanTile = pacman.getTilePosition();
         
-        // Iterate over all entities in the maze
-        for (Entity entity : maze.getEntities()) {
-            // Check if the entity is a FruitEntity
-            if (entity instanceof FruitEntity) {
-                FruitEntity fruit = (FruitEntity) entity;
-                Vector2d fruitPosition = fruit.getPosition();
-                
-                // Calculate the distance from Pacman to this fruit
-                float distance = (float) pacmanPosition.distance(fruitPosition);
-                
-                // If this fruit is closer than any previously found, update the nearest fruit
-                if (distance < minDistance) {
-                    minDistance = distance;
-                    nearestFruitPosition = new Vector2i((int) fruitPosition.x(), (int) fruitPosition.y());
+        // Validate initial conditions
+        if (maze == null || pacmanTile == null || !isValidPosition(maze, pacmanTile)) {
+            return null;
+        }
+        
+        Vector2i nearestFruitPosition = null;
+        int minSteps = Integer.MAX_VALUE;
+    
+        Queue<Vector2i> queue = new LinkedList<>();
+        queue.add(new Vector2i(pacmanTile)); // Create a copy
+        Set<Vector2i> visited = new HashSet<>();
+        visited.add(new Vector2i(pacmanTile)); // Create a copy
+    
+        int steps = 0;
+        while (!queue.isEmpty()) {
+            int size = queue.size();
+            for (int i = 0; i < size; i++) {
+                Vector2i currentPosition = queue.poll();
+                if (currentPosition == null) continue;
+    
+                // Check for fruits at current position
+                for (Entity entity : maze.getEntities()) {
+                    if (entity instanceof FruitEntity) {
+                        FruitEntity fruit = (FruitEntity) entity;
+                        Vector2i fruitTilePos = maze.toTileCoords(fruit.getPosition());
+                        
+                        // Validate fruit position
+                        if (fruitTilePos != null && isValidPosition(maze, fruitTilePos) && 
+                            fruitTilePos.equals(currentPosition)) {
+                            if (steps < minSteps) {
+                                minSteps = steps;
+                                nearestFruitPosition = new Vector2i(currentPosition); // Create a copy
+                            }
+                        }
+                    }
+                }
+    
+                // Explore neighboring tiles
+                for (Direction direction : Direction.values()) {
+                    // Calculate neighbor position
+                    Vector2i neighbor = new Vector2i(
+                        currentPosition.x + direction.getDx(),
+                        currentPosition.y + direction.getDy()
+                    );
+                    
+                    // Validate neighbor position
+                    if (!isValidPosition(maze, neighbor)) {
+                        continue;
+                    }
+    
+                    Tile neighborTile = maze.getTile(neighbor);
+                    
+                    if (neighborTile != null && neighborTile.getState().isPassable() && 
+                        !visited.contains(neighbor)) {
+                        visited.add(new Vector2i(neighbor)); // Create a copy
+                        queue.add(new Vector2i(neighbor)); // Create a copy
+                    }
                 }
             }
+            steps++;
         }
+    
+        // If no fruit is found, return null; otherwise, return an array with x, y, and steps
+        return nearestFruitPosition != null ? 
+               new int[]{nearestFruitPosition.x, nearestFruitPosition.y, minSteps} : 
+               null;
+    }
+    
+    private float[] encodeNearestFruitPosition() {
+        float[] defaultEncoding = new float[]{0f, 0f, 0f};
         
-        // Return the position of the nearest fruit, or null if no fruits are found
-        return nearestFruitPosition;
+        // Validate Pacman state
+        if (pacman == null) {
+            return defaultEncoding;
+        }
+    
+        // Find the nearest fruit position and steps using BFS-based Manhattan distance
+        int[] result = findNearestFruitPosition();
+    
+        if (result == null) {
+            return defaultEncoding;
+        }
+    
+        try {
+            // Get Pacman's current position as tile coordinates
+            Vector2i pacmanTile = pacman.getTilePosition();
+            if (pacmanTile == null) {
+                return defaultEncoding;
+            }
+    
+            // Calculate relative tile coordinates
+            Vector2i relative = new Vector2i(result[0], result[1]).sub(pacmanTile);
+    
+            // Get and validate Pacman's direction
+            Direction forward = pacman.getDirection();
+            if (forward == null) {
+                return defaultEncoding;
+            }
+            
+            Direction right = forward.right();
+    
+            // Encode relative coordinates based on Pacman's current direction
+            float fruitX = (float) (relative.x * forward.getDx() + relative.y * forward.getDy());
+            float fruitY = (float) (relative.x * right.getDx() + relative.y * right.getDy());
+    
+            return new float[]{fruitX, fruitY, result[2]};
+        } catch (Exception e) {
+            // If any calculation fails, return the default encoding
+            return defaultEncoding;
+        }
     }
 
-    private float[] encodeNearestFruitPosition() {
-        // Find the nearest fruit position
-        Vector2i nearestFruitPosition = findNearestFruitPosition();
+    // private Vector2i findNearestFruitPosition() {
+    //     Maze maze = pacman.getMaze();
+    //     Vector2d pacmanPosition = pacman.getPosition(); // Pacman's current position
+    //     float minDistance = Float.MAX_VALUE;
+    //     Vector2i nearestFruitPosition = null;
+        
+    //     // Iterate over all entities in the maze
+    //     for (Entity entity : maze.getEntities()) {
+    //         // Check if the entity is a FruitEntity
+    //         if (entity instanceof FruitEntity) {
+    //             FruitEntity fruit = (FruitEntity) entity;
+    //             Vector2d fruitPosition = fruit.getPosition();
+                
+    //             // Calculate the distance from Pacman to this fruit
+    //             float distance = (float) pacmanPosition.distance(fruitPosition);
+                
+    //             // If this fruit is closer than any previously found, update the nearest fruit
+    //             if (distance < minDistance) {
+    //                 minDistance = distance;
+    //                 nearestFruitPosition = new Vector2i((int) fruitPosition.x(), (int) fruitPosition.y());
+    //             }
+    //         }
+    //     }
+        
+    //     // Return the position of the nearest fruit, or null if no fruits are found
+    //     return nearestFruitPosition;
+    // }
+
+    // private float[] encodeNearestFruitPosition() {
+    //     // Find the nearest fruit position
+    //     Vector2i nearestFruitPosition = findNearestFruitPosition();
     
-        if (nearestFruitPosition == null) {
-            // If no fruit is found, return zero features
-            return new float[]{0f, 0f, 0f};
-        }
+    //     if (nearestFruitPosition == null) {
+    //         // If no fruit is found, return zero features
+    //         return new float[]{0f, 0f, 0f};
+    //     }
     
-        // Get Pacman's current position
-        Vector2d pacmanPosition = pacman.getPosition();
+    //     // Get Pacman's current position
+    //     Vector2d pacmanPosition = pacman.getPosition();
     
-        // Calculate relative coordinates
-        Vector2d relative = new Vector2d(nearestFruitPosition.x, nearestFruitPosition.y).sub(pacmanPosition);
+    //     // Calculate relative coordinates
+    //     Vector2d relative = new Vector2d(nearestFruitPosition.x, nearestFruitPosition.y).sub(pacmanPosition);
     
-        // Encode relative coordinates based on Pacman's current direction
-        Direction forward = pacman.getDirection();
-        Direction right = forward.right();
+    //     // Encode relative coordinates based on Pacman's current direction
+    //     Direction forward = pacman.getDirection();
+    //     Direction right = forward.right();
     
-        float fruitX = (float) (relative.x() * forward.getDx() + relative.y() * forward.getDy());
-        float fruitY = (float) (relative.x() * right.getDx() + relative.y() * right.getDy());
+    //     float fruitX = (float) (relative.x() * forward.getDx() + relative.y() * forward.getDy());
+    //     float fruitY = (float) (relative.x() * right.getDx() + relative.y() * right.getDy());
     
-        // Calculate the distance to the nearest fruit
-        float distance = (float) relative.length();
+    //     // Calculate the distance to the nearest fruit
+    //     float distance = (float) relative.length();
     
-        // Return the encoded features (normalized if necessary)
-        return new float[]{fruitX, fruitY, distance};
-    }
+    //     // Return the encoded features (normalized if necessary)
+    //     return new float[]{fruitX, fruitY, distance};
+    // }
 
     // private GhostEntity findNearestGhost() {
     //     // Get Pacman's current position
@@ -303,34 +496,70 @@ public class NeatPacmanBehavior implements Behavior {
     //     return new float[]{ghostX, ghostY, isMovingForward, isMovingRight, isMovingLeft, isMovingBackward};
     // }
 
+    private int bfsDistance(Vector2i startTile, Vector2i endTile) {
+        if (startTile.equals(endTile)) return 0; // If Pacman and ghost are on the same tile
+    
+        Queue<Vector2i> queue = new LinkedList<>();
+        Set<Vector2i> visited = new HashSet<>();
+        queue.add(startTile);
+        visited.add(startTile);
+    
+        int steps = 0;
+        while (!queue.isEmpty()) {
+            int size = queue.size();
+            for (int i = 0; i < size; i++) {
+                Vector2i current = queue.poll();
+                if (current.equals(endTile)) return steps;
+    
+                // Check neighboring tiles
+                for (Direction direction : Direction.values()) {
+                    int neighborX = current.x + direction.getDx();
+                    int neighborY = current.y + direction.getDy();
+                    Vector2i neighbor = new Vector2i(neighborX, neighborY);
+    
+                    // Check if the neighbor is within bounds and is passable
+                    if (isValidPosition(pacman.getMaze(), neighbor)) {
+                        Tile neighborTile = pacman.getMaze().getTile(neighbor);
+                        if (neighborTile.getState().isPassable() && !visited.contains(neighbor)) {
+                            visited.add(neighbor);
+                            queue.add(neighbor);
+                        }
+                    }
+                }
+            }
+            steps++;
+        }
+        return Integer.MAX_VALUE; // Return a large value if no path is found
+    }
+
     private float[] encodeAllGhosts() {
-        // Get Pacman's current position
-        Vector2d pacmanPosition = pacman.getPosition();
+        // Get Pacman's current position as tile coordinates
+        Vector2i pacmanTile = pacman.getTilePosition();
     
         // List to store encoded features for each ghost
         List<float[]> ghostEncodings = new ArrayList<>();
-        boolean isAnyGhostFrightened = false; // Track if any ghost is in the FRIGHTENED state
+        boolean isAnyGhostFrightened = false;
     
         // Iterate over all entities in the maze and encode each ghost
         for (Entity entity : pacman.getMaze().getEntities()) {
-            // Check if the entity is a ghost
             if (entity instanceof GhostEntity) {
                 GhostEntity ghost = (GhostEntity) entity;
-                // Get the ghost's position
-                Vector2d ghostPosition = ghost.getPosition();
+    
+                // Get the ghost's position as tile coordinates
+                Vector2i ghostTile = pacman.getMaze().toTileCoords(ghost.getPosition());
     
                 // Calculate relative coordinates
-                Vector2d relative = new Vector2d(ghostPosition.x(), ghostPosition.y()).sub(pacmanPosition);
+                Vector2i relative = new Vector2i(ghostTile).sub(pacmanTile);
     
                 // Encode relative coordinates based on Pacman's current direction
                 Direction forward = pacman.getDirection();
                 Direction right = forward.right();
     
-                float ghostX = (float) (relative.x() * forward.getDx() + relative.y() * forward.getDy());
-                float ghostY = (float) (relative.x() * right.getDx() + relative.y() * right.getDy());
+                float ghostX = (float) (relative.x * forward.getDx() + relative.y * forward.getDy());
+                float ghostY = (float) (relative.x * right.getDx() + relative.y * right.getDy());
     
-                // Calculate the distance to the ghost
-                float distance = (float) relative.length();
+                // Calculate BFS distance to the ghost
+                int distance = bfsDistance(pacmanTile, ghostTile);
     
                 // Check if the ghost is in the CHASE state
                 float isChasing = ghost.getState() == GhostState.CHASE ? 1f : 0f;
@@ -341,7 +570,7 @@ public class NeatPacmanBehavior implements Behavior {
                 }
     
                 // Add the encoded features for this ghost
-                ghostEncodings.add(new float[]{ghostX, ghostY, isChasing, distance});
+                ghostEncodings.add(new float[]{ghostX, ghostY, isChasing, (float) distance});
             }
         }
     
@@ -366,6 +595,70 @@ public class NeatPacmanBehavior implements Behavior {
         // Return the final encoding with all ghost features (17 features total)
         return allGhostsEncoding;
     }
+    
+    // private float[] encodeAllGhosts() {
+    //     // Get Pacman's current position
+    //     Vector2d pacmanPosition = pacman.getPosition();
+    
+    //     // List to store encoded features for each ghost
+    //     List<float[]> ghostEncodings = new ArrayList<>();
+    //     boolean isAnyGhostFrightened = false; // Track if any ghost is in the FRIGHTENED state
+    
+    //     // Iterate over all entities in the maze and encode each ghost
+    //     for (Entity entity : pacman.getMaze().getEntities()) {
+    //         // Check if the entity is a ghost
+    //         if (entity instanceof GhostEntity) {
+    //             GhostEntity ghost = (GhostEntity) entity;
+    //             // Get the ghost's position
+    //             Vector2d ghostPosition = ghost.getPosition();
+    
+    //             // Calculate relative coordinates
+    //             Vector2d relative = new Vector2d(ghostPosition.x(), ghostPosition.y()).sub(pacmanPosition);
+    
+    //             // Encode relative coordinates based on Pacman's current direction
+    //             Direction forward = pacman.getDirection();
+    //             Direction right = forward.right();
+    
+    //             float ghostX = (float) (relative.x() * forward.getDx() + relative.y() * forward.getDy());
+    //             float ghostY = (float) (relative.x() * right.getDx() + relative.y() * right.getDy());
+    
+    //             // Calculate the distance to the ghost
+    //             float distance = (float) relative.length();
+    
+    //             // Check if the ghost is in the CHASE state
+    //             float isChasing = ghost.getState() == GhostState.CHASE ? 1f : 0f;
+    
+    //             // Check if the ghost is in the FRIGHTENED state
+    //             if (ghost.getState() == GhostState.FRIGHTENED) {
+    //                 isAnyGhostFrightened = true;
+    //             }
+    
+    //             // Add the encoded features for this ghost
+    //             ghostEncodings.add(new float[]{ghostX, ghostY, isChasing, distance});
+    //         }
+    //     }
+    
+    //     // If fewer than four ghosts are found, pad the remaining slots with zeros
+    //     while (ghostEncodings.size() < 4) {
+    //         ghostEncodings.add(new float[]{0f, 0f, 0f, 0f});
+    //     }
+    
+    //     // Flatten the list of encoded features into a single array
+    //     float[] allGhostsEncoding = new float[17]; // 16 for the four ghosts' features + 1 for the frightened flag
+    //     int index = 0;
+    //     for (float[] encoding : ghostEncodings) {
+    //         allGhostsEncoding[index++] = encoding[0];
+    //         allGhostsEncoding[index++] = encoding[1];
+    //         allGhostsEncoding[index++] = encoding[2];
+    //         allGhostsEncoding[index++] = encoding[3];
+    //     }
+    
+    //     // Add the frightened state as the last feature
+    //     allGhostsEncoding[16] = isAnyGhostFrightened ? 1f : 0f;
+    
+    //     // Return the final encoding with all ghost features (17 features total)
+    //     return allGhostsEncoding;
+    // }
 
     private Vector2i findNearestPowerPelletPosition() {
         // Get Pacman's current tile position
@@ -465,84 +758,97 @@ public class NeatPacmanBehavior implements Behavior {
         }
     }
 
-    private float[] encodeTopNPelletPositions(int topN) {
-        // Prepare the encoding array with exactly 12 slots for top 4 nearest pellets (each pellet has x, y, distance)
-        float[] encodedPellets = new float[topN * 3];
-        
-        // Initialize all positions to zero in case fewer than topN pellets are found
-        Arrays.fill(encodedPellets, 0f);
-    
-        // Get Pacman's current tile position
-        Vector2i pacmanTilePosition = pacman.getTilePosition();
-        Maze maze = pacman.getMaze();
-    
-        // Priority queue to store nearest pellets with a comparator based on distance
-        PriorityQueue<Vector2i> pelletQueue = new PriorityQueue<>((a, b) -> {
-            float distA = (float) pacmanTilePosition.distance(a);
-            float distB = (float) pacmanTilePosition.distance(b);
-            return Float.compare(distA, distB);
-        });
-    
-        // Perform BFS to find all pellets
-        Queue<Vector2i> queue = new LinkedList<>();
-        Set<Vector2i> visited = new HashSet<>();
-        queue.add(pacmanTilePosition);
-        visited.add(pacmanTilePosition);
-    
-        Direction[] directions = Direction.values();
-    
-        while (!queue.isEmpty()) {
-            Vector2i currentTilePosition = queue.poll();
-            
-            // Check if the current position is within maze bounds
-            if (!isValidPosition(maze, currentTilePosition)) {
-                continue;
-            }
-    
+private float[] encodeTopNPelletPositions(int topN) {
+    float[] encodedPellets = new float[topN * 3];
+    Arrays.fill(encodedPellets, 0f);
+
+    // Get Pacman's current tile position
+    Vector2i pacmanTilePosition = pacman.getTilePosition();
+    Maze maze = pacman.getMaze();
+
+    if (!isValidPosition(maze, pacmanTilePosition)) {
+        return encodedPellets;
+    }
+
+    // Map to store pellet positions and their BFS distances
+    Map<Vector2i, Integer> pelletDistances = new HashMap<>();
+
+    // Perform BFS to find all pellets
+    Queue<Vector2i> queue = new LinkedList<>();
+    Set<Vector2i> visited = new HashSet<>();
+    queue.add(pacmanTilePosition);
+    visited.add(pacmanTilePosition);
+
+    int steps = 0;
+    int levelSize = 1; // Number of nodes at current level
+    int nodesProcessed = 0; // Nodes processed at current level
+
+    while (!queue.isEmpty()) {
+        Vector2i currentTilePosition = queue.poll();
+        nodesProcessed++;
+
+        // Check if the current position is within maze bounds
+        if (isValidPosition(maze, currentTilePosition)) {
             Tile currentTile = maze.getTile(currentTilePosition);
-    
-            if (currentTile.getState() == TileState.PELLET || currentTile.getState() == TileState.POWER_PELLET) {
-                pelletQueue.add(new Vector2i(currentTilePosition));
+
+            if (currentTile.getState() == TileState.PELLET || 
+                currentTile.getState() == TileState.POWER_PELLET) {
+                pelletDistances.put(new Vector2i(currentTilePosition), steps);
             }
-    
-            for (Direction direction : directions) {
+
+            // Explore neighbors
+            for (Direction direction : Direction.values()) {
                 Vector2i neighborPosition = new Vector2i(currentTilePosition).add(direction.asVector());
                 
-                // Only process neighbor if it's within bounds and not visited
                 if (!visited.contains(neighborPosition) && isValidPosition(maze, neighborPosition)) {
                     Tile neighborTile = maze.getTile(neighborPosition);
                     if (neighborTile.getState().isPassable()) {
-                        queue.add(neighborPosition);
+                        queue.add(new Vector2i(neighborPosition));
                         visited.add(neighborPosition);
                     }
                 }
             }
         }
-    
-        int index = 0;
-    
-        // Encode the nearest pellets up to topN
-        while (!pelletQueue.isEmpty() && index < topN * 3) {
-            Vector2i pelletPosition = pelletQueue.poll();
-            Vector2d relative = new Vector2d(pelletPosition.x, pelletPosition.y).sub(pacman.getPosition());
-    
-            // Encode based on Pacman's current direction
-            Direction forward = pacman.getDirection();
-            Direction right = forward.right();
-    
-            float pelletX = (float) (relative.x() * forward.getDx() + relative.y() * forward.getDy());
-            float pelletY = (float) (relative.x() * right.getDx() + relative.y() * right.getDy());
-            float distance = (float) relative.length();
-    
-            // Safely add to encoding array
-            encodedPellets[index++] = pelletX;
-            encodedPellets[index++] = pelletY;
-            encodedPellets[index++] = distance;
+
+        // Check if we've processed all nodes at current level
+        if (nodesProcessed == levelSize) {
+            steps++;
+            levelSize = queue.size();
+            nodesProcessed = 0;
         }
-    
-        return encodedPellets;
     }
+
+    // Sort pellets by BFS distance
+    List<Map.Entry<Vector2i, Integer>> sortedPellets = new ArrayList<>(pelletDistances.entrySet());
+    sortedPellets.sort(Map.Entry.comparingByValue());
+
+    int index = 0;
     
+    // Encode the nearest pellets up to topN
+    for (Map.Entry<Vector2i, Integer> entry : sortedPellets) {
+        if (index >= topN * 3) break;
+
+        Vector2i pelletPosition = entry.getKey();
+        int bfsDistance = entry.getValue();
+
+        Vector2d relative = new Vector2d(pelletPosition.x, pelletPosition.y)
+            .sub(pacman.getPosition());
+
+        // Encode based on Pacman's current direction
+        Direction forward = pacman.getDirection();
+        Direction right = forward.right();
+
+        float pelletX = (float) (relative.x() * forward.getDx() + relative.y() * forward.getDy());
+        float pelletY = (float) (relative.x() * right.getDx() + relative.y() * right.getDy());
+
+        // Use BFS distance instead of Euclidean distance
+        encodedPellets[index++] = pelletX;
+        encodedPellets[index++] = pelletY;
+        encodedPellets[index++] = bfsDistance;
+    }
+
+    return encodedPellets;
+}
     
 
     private float calculateDistanceToWall(Direction direction) {
@@ -712,17 +1018,15 @@ public class NeatPacmanBehavior implements Behavior {
         distToNearestWallBehind = Math.min(distToNearestWallBehind / maxDistance, 1f);
 
 
-        float[] outputs = client.getCalculator().calculate(new float[]{
+        float[] input = new float[]{
             canMoveForward ? 1f : 0f,
             canMoveLeft ? 1f : 0f,
             canMoveRight ? 1f : 0f,
             canMoveBehind ? 1f : 0f,
-            // distToNearestFruit,
             distToNearestWallForward,
             distToNearestWallLeft,
             distToNearestWallRight,
             distToNearestWallBehind,
-            // pilletsRemaining,
             pelletsForward,
             pelletsLeft,
             pelletsRight,
@@ -762,7 +1066,13 @@ public class NeatPacmanBehavior implements Behavior {
             nearestPowerPelletEnc[0],
             nearestPowerPelletEnc[1],
             nearestPowerPelletEnc[2]
-        }).join();
+        };
+        
+        // Print the input array
+        // System.out.println("Input: " + Arrays.toString(input));
+        
+        // Now pass it to the calculate function
+        float[] outputs = client.getCalculator().calculate(input).join();
 
         // Sort the directions by the network output in descending order
         List<Integer> sortedIndices = new ArrayList<>(List.of(0, 1, 2, 3));
@@ -824,6 +1134,8 @@ public class NeatPacmanBehavior implements Behavior {
 
         // Penalize ghost interactions
         scoreModifier += penalizeRemainingLives();
+        
+        scoreModifier += penalizeGhostInteraction();
 
         // Penalize eating fruits
         scoreModifier += penalizeFruitInteraction();
