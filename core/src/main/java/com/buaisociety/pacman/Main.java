@@ -103,9 +103,9 @@ public class Main extends ApplicationAdapter {
 
     public @NotNull Neat createNeat() {
         // Change this to true/false as needed, if you want to load from file
-        if (false) {
+        if (true) {
             // TODO: Change this to the exact file you want to load
-            File exactFile = new File("saves" + File.separator + "oct25-21" + File.separator + "generation-111.json");
+            File exactFile = new File("saves" + File.separator + "oct26-50" + File.separator + "generation-0.json");
             // load exactFile contents to string
             String json;
             try {
@@ -125,7 +125,7 @@ public class Main extends ApplicationAdapter {
             neatParameters.setTargetClientsPerSpecies(12);  // targeting ~12 clients per species
             neatParameters.setStagnationLimit(10);  // lower stagnation limit
             neatParameters.setUseBiasNode(true);  // use bias node
-            return new NeatImpl(47, 4, totalGames, neatParameters);
+            return new NeatImpl(14, 4, totalGames, neatParameters);
         }
     }
 
